@@ -1,80 +1,63 @@
 <!DOCTYPE html>
 <html lang="nl">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Scheepsdetectie via GPS</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AIS Scheepsdata Nederland</title>
   <style>
     body {
       font-family: sans-serif;
-      background-color: #e0f2fe;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      margin: 0;
+      background: #eef;
+      padding: 20px;
     }
-    .container {
-      background-color: white;
-      padding: 2rem;
-      border-radius: 1rem;
-      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
-      max-width: 400px;
-      text-align: center;
-    }
-    .loader {
-      margin-top: 1rem;
-      color: #555;
-    }
-    .error {
-      color: red;
-      margin-top: 1rem;
-    }
-    .ship-name {
-      font-size: 1.5rem;
-      font-weight: bold;
-      margin-top: 1rem;
+    #output {
+      white-space: pre-wrap;
+      background: #fff;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 0 5px rgba(0,0,0,0.2);
+      max-height: 500px;
+      overflow-y: auto;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Scheepsdetectie</h1>
-    <p>We bepalen je locatie...</p>
-    <div id="output" class="loader"></div>
-  </div>
+
+  <h1>Scheepsposities (AIS) - Nederland & Kust</h1>
+  <p>Live AIS-berichten binnen deze regio:</p>
+  <div id="output">Verbinding maken...</div>
 
   <script>
-    const output = document.getElementById('output');
+    const output = document.getElementById("output");
 
-    if ('geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          const lat = position.coords.latitude;
-          const lon = position.coords.longitude;
+    const socket = new WebSocket("wss://stream.aisstream.io/v0/stream");
 
-          try {
-            const res = await fetch(`https://ais.marineplan.com/location/v1/locations.json?lat=${lat}&lon=${lon}`);
-            if (!res.ok) throw new Error("API-fout");
+    socket.onopen = function () {
+      const subscriptionMessage = {
+        Apikey: "210bbf8a558ed7738695c63a791a5d371a1389ae",
+        BoundingBoxes: [[[50.7, 3.3], [53.7, 7.3]]],  // Nederland + kust
+        FilterMessageTypes: ["PositionReport"]
+      };
+      socket.send(JSON.stringify(subscriptionMessage));
+      output.innerText = "✅ Verbonden met AIS-stream voor Nederland...\n\n";
+    };
 
-            const data = await res.json();
+    socket.onmessage = function (event) {
+      const aisMessage = JSON.parse(event.data);
+      const timestamp = new Date().toLocaleTimeString();
+      const mmsi = aisMessage?.MetaData?.MMSI || "Onbekend MMSI";
+      const shipname = aisMessage?.Message?.ShipName || "Onbekende naam";
+      const lat = aisMessage?.Message?.Latitude?.toFixed(4);
+      const lon = aisMessage?.Message?.Longitude?.toFixed(4);
 
-            if (data.length > 0 && data[0].name) {
-              output.innerHTML = `<div class="ship-name">Je bent op: <br><strong>${data[0].name}</strong></div>`;
-            } else {
-              output.innerHTML = `<div class="ship-name">Geen schip gevonden op deze locatie.</div>`;
-            }
-          } catch (err) {
-            output.innerHTML = `<div class="error">Fout bij ophalen gegevens.</div>`;
-          }
-        },
-        (error) => {
-          output.innerHTML = `<div class="error">Locatie kon niet worden opgehaald.</div>`;
-        }
-      );
-    } else {
-      output.innerHTML = `<div class="error">Geolocatie wordt niet ondersteund in deze browser.</div>`;
-    }
+      const message = `[${timestamp}] Schip: ${shipname} | MMSI: ${mmsi} | Locatie: ${lat}, ${lon}\n`;
+      output.innerText = message + output.innerText;
+    };
+
+    socket.onerror = function (err) {
+      output.innerText += "\n❌ Fout met WebSocket:\n" + err.message;
+    };
   </script>
+
 </body>
 </html>
