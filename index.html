@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scheepsdetectie via GPS</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      background-color: #e0f2fe;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+    }
+    .container {
+      background-color: white;
+      padding: 2rem;
+      border-radius: 1rem;
+      box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+      max-width: 400px;
+      text-align: center;
+    }
+    .loader {
+      margin-top: 1rem;
+      color: #555;
+    }
+    .error {
+      color: red;
+      margin-top: 1rem;
+    }
+    .ship-name {
+      font-size: 1.5rem;
+      font-weight: bold;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Scheepsdetectie</h1>
+    <p>We bepalen je locatie...</p>
+    <div id="output" class="loader"></div>
+  </div>
+
+  <script>
+    const output = document.getElementById('output');
+
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const lat = position.coords.latitude;
+          const lon = position.coords.longitude;
+
+          try {
+            const res = await fetch(`https://ais.marineplan.com/location/v1/locations.json?lat=${lat}&lon=${lon}`);
+            if (!res.ok) throw new Error("API-fout");
+
+            const data = await res.json();
+
+            if (data.length > 0 && data[0].name) {
+              output.innerHTML = `<div class="ship-name">Je bent op: <br><strong>${data[0].name}</strong></div>`;
+            } else {
+              output.innerHTML = `<div class="ship-name">Geen schip gevonden op deze locatie.</div>`;
+            }
+          } catch (err) {
+            output.innerHTML = `<div class="error">Fout bij ophalen gegevens.</div>`;
+          }
+        },
+        (error) => {
+          output.innerHTML = `<div class="error">Locatie kon niet worden opgehaald.</div>`;
+        }
+      );
+    } else {
+      output.innerHTML = `<div class="error">Geolocatie wordt niet ondersteund in deze browser.</div>`;
+    }
+  </script>
+</body>
+</html>
