@@ -1,63 +1,128 @@
 <!DOCTYPE html>
 <html lang="nl">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AIS Scheepsdata Nederland</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Op welk schip bevind ik mij?</title>
   <style>
     body {
       font-family: sans-serif;
-      background: #eef;
-      padding: 20px;
+      background-color: #eef;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem;
     }
-    #output {
-      white-space: pre-wrap;
+    .box {
       background: #fff;
-      padding: 10px;
-      border-radius: 8px;
-      box-shadow: 0 0 5px rgba(0,0,0,0.2);
-      max-height: 500px;
-      overflow-y: auto;
+      border-radius: 1rem;
+      padding: 1.5rem;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+      max-width: 500px;
+      text-align: center;
+    }
+    #result {
+      margin-top: 1rem;
+      font-size: 1.2rem;
+      font-weight: bold;
     }
   </style>
 </head>
 <body>
-
-  <h1>Scheepsposities (AIS) - Nederland & Kust</h1>
-  <p>Live AIS-berichten binnen deze regio:</p>
-  <div id="output">Verbinding maken...</div>
+  <div class="box">
+    <h1>Welk schip ligt onder mij?</h1>
+    <p>We bepalen je locatie en zoeken schepen in de buurt...</p>
+    <div id="status">⏳ Locatie ophalen...</div>
+    <div id="result"></div>
+  </div>
 
   <script>
-    const output = document.getElementById("output");
+    const apiKey = "210bbf8a558ed7738695c63a791a5d371a1389ae";
+    const maxDistanceMeters = 300; // max afstand tot schip
 
-    const socket = new WebSocket("wss://stream.aisstream.io/v0/stream");
+    const statusEl = document.getElementById("status");
+    const resultEl = document.getElementById("result");
 
-    socket.onopen = function () {
-      const subscriptionMessage = {
-        Apikey: "210bbf8a558ed7738695c63a791a5d371a1389ae",
-        BoundingBoxes: [[[50.7, 3.3], [53.7, 7.3]]],  // Nederland + kust
-        FilterMessageTypes: ["PositionReport"]
-      };
-      socket.send(JSON.stringify(subscriptionMessage));
-      output.innerText = "✅ Verbonden met AIS-stream voor Nederland...\n\n";
-    };
+    // Haversine afstandsberekening
+    function getDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371e3; // meter
+      const φ1 = lat1 * Math.PI/180;
+      const φ2 = lat2 * Math.PI/180;
+      const Δφ = (lat2 - lat1) * Math.PI/180;
+      const Δλ = (lon2 - lon1) * Math.PI/180;
 
-    socket.onmessage = function (event) {
-      const aisMessage = JSON.parse(event.data);
-      const timestamp = new Date().toLocaleTimeString();
-      const mmsi = aisMessage?.MetaData?.MMSI || "Onbekend MMSI";
-      const shipname = aisMessage?.Message?.ShipName || "Onbekende naam";
-      const lat = aisMessage?.Message?.Latitude?.toFixed(4);
-      const lon = aisMessage?.Message?.Longitude?.toFixed(4);
+      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ/2) * Math.sin(Δλ/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
 
-      const message = `[${timestamp}] Schip: ${shipname} | MMSI: ${mmsi} | Locatie: ${lat}, ${lon}\n`;
-      output.innerText = message + output.innerText;
-    };
+    function findClosestShip(userLat, userLon, messages) {
+      let closest = null;
+      let minDist = Infinity;
 
-    socket.onerror = function (err) {
-      output.innerText += "\n❌ Fout met WebSocket:\n" + err.message;
-    };
+      for (const msg of messages) {
+        const m = msg.Message;
+        if (!m?.Latitude || !m?.Longitude || !m?.ShipName) continue;
+        const d = getDistance(userLat, userLon, m.Latitude, m.Longitude);
+        if (d < minDist && d <= maxDistanceMeters) {
+          closest = m;
+          minDist = d;
+        }
+      }
+
+      return closest;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const userLat = position.coords.latitude;
+        const userLon = position.coords.longitude;
+
+        statusEl.innerText = "📡 Verbinden met AIS-stream...";
+        const socket = new WebSocket("wss://stream.aisstream.io/v0/stream");
+
+        const collected = [];
+
+        socket.onopen = function () {
+          const boxSize = 0.05; // ~5km
+          const bbox = [
+            [
+              [userLat - boxSize, userLon - boxSize],
+              [userLat + boxSize, userLon + boxSize]
+            ]
+          ];
+
+          const msg = {
+            Apikey: apiKey,
+            BoundingBoxes: bbox,
+            FilterMessageTypes: ["PositionReport"]
+          };
+          socket.send(JSON.stringify(msg));
+          statusEl.innerText = "🔍 Zoeken naar schepen in de buurt...";
+        };
+
+        socket.onmessage = function (event) {
+          const ais = JSON.parse(event.data);
+          collected.push(ais);
+
+          const ship = findClosestShip(userLat, userLon, collected);
+          if (ship) {
+            resultEl.innerHTML = `🚢 Je bent waarschijnlijk op:<br><strong>${ship.ShipName}</strong>`;
+            statusEl.innerText = `✅ Schip gevonden binnen ${maxDistanceMeters} meter.`;
+            socket.close();
+          }
+        };
+
+        socket.onerror = function (e) {
+          statusEl.innerText = "❌ Fout bij verbinden met AIS-stream.";
+        };
+      },
+      (err) => {
+        statusEl.innerText = "❌ Kan je locatie niet ophalen.";
+      }
+    );
   </script>
-
 </body>
 </html>
