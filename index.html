@@ -3,125 +3,71 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Op welk schip bevind ik mij?</title>
+  <title>Schepen in de Buurt</title>
   <style>
-    body {
-      font-family: sans-serif;
-      background-color: #eef;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 2rem;
-    }
-    .box {
-      background: #fff;
-      border-radius: 1rem;
-      padding: 1.5rem;
-      box-shadow: 0 0 10px rgba(0,0,0,0.2);
-      max-width: 500px;
-      text-align: center;
-    }
-    #result {
-      margin-top: 1rem;
-      font-size: 1.2rem;
-      font-weight: bold;
-    }
+    body { font-family: sans-serif; padding: 20px; background: #f0f0f0; }
+    .card { background: white; padding: 10px 15px; margin: 10px 0; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    .error { color: red; }
   </style>
 </head>
 <body>
-  <div class="box">
-    <h1>Welk schip ligt onder mij?</h1>
-    <p>We bepalen je locatie en zoeken schepen in de buurt...</p>
-    <div id="status">⏳ Locatie ophalen...</div>
-    <div id="result"></div>
-  </div>
+  <h1>Schepen in de buurt (2 km)</h1>
+  <p id="status">Locatie wordt bepaald...</p>
+  <div id="ships"></div>
 
   <script>
-    const apiKey = "210bbf8a558ed7738695c63a791a5d371a1389ae";
-    const maxDistanceMeters = 300; // max afstand tot schip
-
-    const statusEl = document.getElementById("status");
-    const resultEl = document.getElementById("result");
-
-    // Haversine afstandsberekening
-    function getDistance(lat1, lon1, lat2, lon2) {
-      const R = 6371e3; // meter
-      const φ1 = lat1 * Math.PI/180;
-      const φ2 = lat2 * Math.PI/180;
-      const Δφ = (lat2 - lat1) * Math.PI/180;
-      const Δλ = (lon2 - lon1) * Math.PI/180;
-
-      const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-                Math.cos(φ1) * Math.cos(φ2) *
-                Math.sin(Δλ/2) * Math.sin(Δλ/2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-      return R * c;
-    }
-
-    function findClosestShip(userLat, userLon, messages) {
-      let closest = null;
-      let minDist = Infinity;
-
-      for (const msg of messages) {
-        const m = msg.Message;
-        if (!m?.Latitude || !m?.Longitude || !m?.ShipName) continue;
-        const d = getDistance(userLat, userLon, m.Latitude, m.Longitude);
-        if (d < minDist && d <= maxDistanceMeters) {
-          closest = m;
-          minDist = d;
-        }
-      }
-
-      return closest;
-    }
-
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const userLat = position.coords.latitude;
-        const userLon = position.coords.longitude;
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        const ws = new WebSocket("wss://stream.aisstream.io/v0/ais");
+        const ships = new Set();
 
-        statusEl.innerText = "📡 Verbinden met AIS-stream...";
-        const socket = new WebSocket("wss://stream.aisstream.io/v0/stream");
-
-        const collected = [];
-
-        socket.onopen = function () {
-          const boxSize = 0.05; // ~5km
-          const bbox = [
-            [
-              [userLat - boxSize, userLon - boxSize],
-              [userLat + boxSize, userLon + boxSize]
+        ws.onopen = () => {
+          const message = {
+            Apikey: "tryme",
+            BoundingBoxes: [
+              [
+                [lat - 0.018, lon - 0.028],
+                [lat + 0.018, lon + 0.028]
+              ]
             ]
-          ];
-
-          const msg = {
-            Apikey: apiKey,
-            BoundingBoxes: bbox,
-            FilterMessageTypes: ["PositionReport"]
           };
-          socket.send(JSON.stringify(msg));
-          statusEl.innerText = "🔍 Zoeken naar schepen in de buurt...";
+          ws.send(JSON.stringify(message));
         };
 
-        socket.onmessage = function (event) {
-          const ais = JSON.parse(event.data);
-          collected.push(ais);
-
-          const ship = findClosestShip(userLat, userLon, collected);
-          if (ship) {
-            resultEl.innerHTML = `🚢 Je bent waarschijnlijk op:<br><strong>${ship.ShipName}</strong>`;
-            statusEl.innerText = `✅ Schip gevonden binnen ${maxDistanceMeters} meter.`;
-            socket.close();
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          if (data.Messages) {
+            data.Messages.forEach(msg => {
+              const name = msg.Meta?.ShipName || msg.Meta?.MMSI;
+              if (name && !ships.has(name)) {
+                ships.add(name);
+              }
+            });
+            const shipList = Array.from(ships).slice(0, 10);
+            document.getElementById("status").textContent = shipList.length ? "" : "Geen schepen gevonden in de buurt.";
+            const container = document.getElementById("ships");
+            container.innerHTML = "";
+            shipList.forEach(ship => {
+              const div = document.createElement("div");
+              div.className = "card";
+              div.textContent = ship;
+              container.appendChild(div);
+            });
           }
         };
 
-        socket.onerror = function (e) {
-          statusEl.innerText = "❌ Fout bij verbinden met AIS-stream.";
+        ws.onerror = () => {
+          document.getElementById("status").innerHTML = "<span class='error'>Fout bij het verbinden met AISStream.</span>";
         };
+
+        ws.onclose = () => console.log("Verbinding gesloten.");
       },
-      (err) => {
-        statusEl.innerText = "❌ Kan je locatie niet ophalen.";
-      }
+      () => {
+        document.getElementById("status").innerHTML = "<span class='error'>Locatie kan niet worden bepaald.</span>";
+      },
+      { enableHighAccuracy: true }
     );
   </script>
 </body>
